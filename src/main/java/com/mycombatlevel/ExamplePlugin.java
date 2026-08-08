@@ -1,9 +1,11 @@
 package com.mycombatlevel;
 
+import com.google.inject.Provides;
 import net.runelite.api.*;
 import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.MenuEntryAdded;
 import net.runelite.api.widgets.Widget;
+import net.runelite.client.config.ConfigManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
 import net.runelite.client.ui.overlay.Overlay;
@@ -18,12 +20,12 @@ import net.runelite.api.MenuEntry;
 import net.runelite.api.Player;
 import net.runelite.client.eventbus.Subscribe;
 
-
-
 import javax.inject.Inject;
 import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
+
+
 
 
 @PluginDescriptor(
@@ -34,15 +36,8 @@ public class ExamplePlugin extends Plugin
 	@Inject
 	private Client client;
 
-	private int combatLevel;
-	private int attackMin;
-	private int attackMax;
-
-	private boolean isThereSomeoneToAttack;
-	private boolean isPvpWorld;
-	private boolean inWilderness;
-	private boolean inSafeZone;
-
+	@Inject
+	private ExampleConfig config;
 
 	@Inject
 	private OverlayManager overlayManager;
@@ -51,18 +46,31 @@ public class ExamplePlugin extends Plugin
 	private ModelOutlineRenderer modelOutlineRenderer;
 
 
+	private int combatLevel;
+	private int attackMin;
+	private int attackMax;
+	private int wildernessLevel;
+
+	private boolean isThereSomeoneToAttack;
+	private boolean isPvpWorld;
+	private boolean inWilderness;
+	private boolean inSafeZone;
+
 	private final MyOverlay overlay = new MyOverlay();
+	private final MySceneOverlay overmysceneoverlay = new MySceneOverlay();
 
 	@Override
 	protected void startUp()
 	{
 		overlayManager.add(overlay);
+		overlayManager.add(overmysceneoverlay);
 	}
 
 	@Override
 	protected void shutDown()
 	{
 		overlayManager.remove(overlay);
+		overlayManager.remove(overmysceneoverlay);
 	}
 
 
@@ -104,7 +112,7 @@ public class ExamplePlugin extends Plugin
 			return;
 		}
 
-		int combatLevel = player.getCombatLevel();
+		combatLevel = player.getCombatLevel();
 
 		if (combatLevel >= attackMin && combatLevel <= attackMax)
 		{
@@ -139,8 +147,8 @@ public class ExamplePlugin extends Plugin
 			if (client.getGameState() != GameState.LOGGED_IN) { return null; }
 
 			Player localPlayer = client.getLocalPlayer();
-			int combatLevel 	= localPlayer.getCombatLevel();
-			int wildernessLevel = 0;
+			combatLevel 	= localPlayer.getCombatLevel();
+			wildernessLevel = 0;
 			inSafeZone 	= true;
 			isPvpWorld 	= WorldType.isPvpWorld(client.getWorldType());
 			inWilderness = client.getVarbitValue(Varbits.IN_WILDERNESS) == 1;
@@ -171,9 +179,18 @@ public class ExamplePlugin extends Plugin
 				}
 			}
 
+			if(wildernessLevel == 0){
+				if(config.highlightPlayers()){
+					wildernessLevel = 1;
+				}
+			}
+
 			attackMin = Math.max(3, combatLevel - wildernessLevel);
 			attackMax = combatLevel + wildernessLevel;
-
+			if(attackMin == attackMax){
+				attackMin = 0;
+				attackMax = 0;
+			}
 
 			for (Player player : client.getPlayers()) {
 				if (player == localPlayer)
@@ -186,21 +203,6 @@ public class ExamplePlugin extends Plugin
 				if (playerCombatLevel >= attackMin && playerCombatLevel <= attackMax)
 				{
 					isThereSomeoneToAttack = true;
-
-
-
-					// Orange outline around player in the game
-					modelOutlineRenderer.drawOutline(
-							player,
-							2,
-							Color.ORANGE,
-							4
-					);
-
-
-
-
-
 
 					LocalPoint localPoint = player.getLocalLocation();
 
@@ -255,8 +257,32 @@ public class ExamplePlugin extends Plugin
 		public Dimension render(Graphics2D graphics)
 		{
 			Player localPlayer = client.getLocalPlayer();
+			isThereSomeoneToAttack = false;
 
-			if(isThereSomeoneToAttack && (isPvpWorld || inWilderness)) {
+
+			for (Player player : client.getPlayers())
+			{
+				if (player == localPlayer)
+				{
+					continue;
+				}
+
+				int playerCombatLevel = player.getCombatLevel();
+
+				if (playerCombatLevel >= attackMin && playerCombatLevel <= attackMax)
+				{
+					isThereSomeoneToAttack = true;
+					modelOutlineRenderer.drawOutline(
+							player,
+							2,
+							Color.ORANGE,
+							4
+					);
+				}
+			}
+
+
+			if(isThereSomeoneToAttack && (isPvpWorld || inWilderness || config.highlightPlayers())) {
 
 				Color myColor = Color.GREEN;
 
@@ -274,27 +300,14 @@ public class ExamplePlugin extends Plugin
 				}
 			}
 
-			for (Player player : client.getPlayers())
-			{
-				if (player == localPlayer)
-				{
-					continue;
-				}
-
-				int playerCombatLevel = player.getCombatLevel();
-
-				if (playerCombatLevel >= attackMin && playerCombatLevel <= attackMax)
-				{
-					modelOutlineRenderer.drawOutline(
-							player,
-							2,
-							Color.ORANGE,
-							4
-					);
-				}
-			}
-
 			return null;
 		}
+	}
+
+
+	@Provides
+	ExampleConfig provideConfig(ConfigManager configManager)
+	{
+		return configManager.getConfig(ExampleConfig.class);
 	}
 }

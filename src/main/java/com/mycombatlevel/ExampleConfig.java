@@ -4,16 +4,16 @@ import net.runelite.client.config.Config;
 import net.runelite.client.config.ConfigGroup;
 import net.runelite.client.config.ConfigItem;
 
-@ConfigGroup("example")
+@ConfigGroup("mycombatlevel")
 public interface ExampleConfig extends Config
 {
 	@ConfigItem(
-		keyName = "greeting",
-		name = "Welcome Greeting",
-		description = "The message to show to the user when they login"
+			keyName = "highlightPlayers",
+			name = "Highlight Attackable Players",
+			description = "Highlight players within your combat range"
 	)
-	default String greeting()
+	default boolean highlightPlayers()
 	{
-		return "Hello";
+		return true;
 	}
 }
