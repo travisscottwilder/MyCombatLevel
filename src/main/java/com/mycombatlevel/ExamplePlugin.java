@@ -5,7 +5,9 @@ import net.runelite.api.coords.LocalPoint;
 import net.runelite.api.events.*;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
+import net.runelite.client.events.ConfigChanged;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
@@ -23,23 +25,29 @@ import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 
-@PluginDescriptor(
-		name = "My Combat Level"
-)
+@PluginDescriptor(name = "My Combat Level")
 public class ExamplePlugin extends Plugin {
 	@Inject
 	private Client client;
-
 	@Inject
 	private ExampleConfig config;
-
 	@Inject
 	private OverlayManager overlayManager;
-
 	@Inject
 	private ModelOutlineRenderer modelOutlineRenderer;
+
+
+
+
+
+	@Provides
+	ExampleConfig provideConfig(ConfigManager configManager) {return configManager.getConfig(ExampleConfig.class);}
 
 
 
@@ -57,9 +65,16 @@ public class ExamplePlugin extends Plugin {
 	private int wildernessLevel 	= 0;
 	private int lastWildernessLevel = 0;
 	private boolean isPvpWorld 		= false;
+	private final List<EnemyMinimapMarker> enemyMinimapMarkers = new ArrayList<>();
 
 	private final overlay_minimap 	overlay_minimap 	= new overlay_minimap();
 	private final overlay_screen 	overlay_screen 		= new overlay_screen();
+
+
+	@Inject
+	private ClientThread clientThread;
+	private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
+	private ScheduledFuture<?> minimapTask;
 
 
 
@@ -72,11 +87,28 @@ public class ExamplePlugin extends Plugin {
 		calculateLocalAttackRange();
 		allEnemies	= calculateAllEnemies();
 		isPvpWorld 	= WorldType.isPvpWorld(client.getWorldType());
+
+		startMinimapThread();
 	}
 
 	@Override
-	protected void shutDown() { overlayManager.remove(overlay_minimap);overlayManager.remove(overlay_screen); }
+	protected void shutDown() {
+		overlayManager.remove(overlay_minimap);overlayManager.remove(overlay_screen);
 
+		if (minimapTask != null) {
+			minimapTask.cancel(true);
+			minimapTask = null;
+		}
+	}
+
+
+
+
+	@Subscribe
+	public void onConfigChanged(ConfigChanged event) {
+		if (!event.getGroup().equals("mycombatlevel")) { return; }
+		startMinimapThread();
+	}
 
 
 
@@ -94,22 +126,13 @@ public class ExamplePlugin extends Plugin {
 	}
 
 	@Subscribe
-	private void onPlayerDespawned(PlayerDespawned event) {
-		allEnemies.remove(event.getPlayer());
-		calculateLocalAttackRange();
-	}
+	private void onPlayerDespawned(PlayerDespawned event) { allEnemies.remove(event.getPlayer());calculateLocalAttackRange(); }
 
 	@Subscribe
-	private void onStatChanged(StatChanged event) {
-		calculateLocalAttackRange();
-		calculateAllEnemies();
-	}
+	private void onStatChanged(StatChanged event) { calculateLocalAttackRange();calculateAllEnemies(); }
 
 	@Subscribe
-	public void onWorldChanged(WorldChanged event) {
-		isPvpWorld = WorldType.isPvpWorld(client.getWorldType());
-		calculateAllEnemies();
-	}
+	public void onWorldChanged(WorldChanged event) {isPvpWorld = WorldType.isPvpWorld(client.getWorldType());calculateAllEnemies(); }
 
 
 
@@ -161,7 +184,6 @@ public class ExamplePlugin extends Plugin {
 
 
 
-
 	@Subscribe
 	private void onGameTick(GameTick event) {
         boolean inWilderness 	= client.getVarbitValue(Varbits.IN_WILDERNESS) == 1;
@@ -169,9 +191,7 @@ public class ExamplePlugin extends Plugin {
 		validationToDraw 		= (inWilderness || config.highlightInaSafeSpot());
 
 		if (isPvpWorld) {
-			//Widget safeZoneWidget	= client.getWidget(WidgetInfo.PVP_WORLD_SAFE_ZONE);
 			Widget safeZoneWidget	= client.getWidget(InterfaceID.PvpIcons.PVPW_SAFE);
-
 			inSafeZone 				= safeZoneWidget != null && !safeZoneWidget.isHidden();
 			wildernessLevel 		= 15;
 
@@ -180,7 +200,7 @@ public class ExamplePlugin extends Plugin {
 		}else{ wildernessLevel 		= 1; }
 
 		if(inWilderness) {
-			inSafeZone 		= false;
+			inSafeZone 				= false;
 			Widget wildernessWidget = client.getWidget(InterfaceID.PvpIcons.WILDERNESSLEVEL);
 
 			if (wildernessWidget != null) {
@@ -205,66 +225,46 @@ public class ExamplePlugin extends Plugin {
 			calculateLocalAttackRange();
 			allEnemies = calculateAllEnemies();
 		}lastWildernessLevel = wildernessLevel;
+
+		calculateMinimMapCoords();
 	}
 
 
 
+
 	private class overlay_minimap extends Overlay {
-		overlay_minimap() {setPosition(OverlayPosition.DYNAMIC);setLayer(OverlayLayer.ABOVE_WIDGETS);}
+		overlay_minimap() { setPosition(OverlayPosition.DYNAMIC);setLayer(OverlayLayer.ABOVE_WIDGETS); }
 
 		@Override
 		public Dimension render(Graphics2D graphics) {
 			if (client.getGameState() != GameState.LOGGED_IN) { return null; }
 
-			if(validationToDraw) {
-				if (!allEnemies.isEmpty()) {
-					for (Player player : allEnemies) {
-						LocalPoint localPoint = player.getLocalLocation();
-						if (localPoint == null) { continue; }
+			if(validationToDraw && !enemyMinimapMarkers.isEmpty()) {
 
-						Point minimapPoint = Perspective.localToMinimap(client, localPoint);
-						if (minimapPoint != null) {
-							int x = minimapPoint.getX();
-							int y = minimapPoint.getY();
+				for (EnemyMinimapMarker marker : enemyMinimapMarkers) {
 
-							if(config.dotWidth() > 10){
-								x -= 4;
-								y -= 3;
-							}else if(config.dotWidth() > 8){
-								x -= 3;
-								y -= 2;
-							}else if(config.dotWidth() > 6) {
-								x -= 2;
-								y -= 1;
-							}else if(config.dotWidth() > 3){
-								y -= 1;
-								x -= 1;
-							}
+					graphics.setColor(config.dotBackgroundColor());
+					graphics.fillOval(
+							marker.x - 1,
+							marker.y,
+							config.dotWidth(),
+							config.dotWidth()
+					);
 
-							graphics.setColor(config.dotBackgroundColor());
-							graphics.fillOval(
-								x - 1,
-								y,
-								config.dotWidth(),
-								config.dotWidth()
-							);
-
-							graphics.setColor(getEnemyColor(player.getCombatLevel()));
-							graphics.fillOval(
-								x,
-								y,
-								config.dotWidth() - 2,
-								config.dotWidth() - 2
-							);
-						}
-					}
+					graphics.setColor(marker.color);
+					graphics.fillOval(
+							marker.x,
+							marker.y,
+							config.dotWidth() - 2,
+							config.dotWidth() - 2
+					);
 				}
+
 			}
 
 			return null;
 		}
 	}
-
 
 	private class overlay_screen extends Overlay {
 		overlay_screen() {setPosition(OverlayPosition.DYNAMIC);setLayer(OverlayLayer.ABOVE_SCENE);}
@@ -307,10 +307,6 @@ public class ExamplePlugin extends Plugin {
 			return null;
 		}
 	}
-
-
-	@Provides
-	ExampleConfig provideConfig(ConfigManager configManager) {return configManager.getConfig(ExampleConfig.class);}
 
 
 
@@ -356,6 +352,7 @@ public class ExamplePlugin extends Plugin {
             }
 		}
 
+		calculateMinimMapCoords();
 		return allEnemies;
 	}
 
@@ -369,4 +366,72 @@ public class ExamplePlugin extends Plugin {
 		attackMax 		= myCombatLevel + wildernessLevel;
 		if(attackMin == attackMax){ attackMin = 0;attackMax = 0; }
 	}
+
+
+	private void calculateMinimMapCoords(){
+		enemyMinimapMarkers.clear();
+
+		for (Player player : allEnemies) {
+			LocalPoint localPoint = player.getLocalLocation();
+
+			if (localPoint == null) { continue; }
+
+			Point minimapPoint = Perspective.localToMinimap(client, localPoint);
+			if (minimapPoint != null) {
+				int x = minimapPoint.getX();
+				int y = minimapPoint.getY();
+
+				if(config.dotWidth() > 10){
+					x -= 4;
+					y -= 3;
+				}else if(config.dotWidth() > 8){
+					x -= 3;
+					y -= 2;
+				}else if(config.dotWidth() > 6) {
+					x -= 2;
+					y -= 1;
+				}else if(config.dotWidth() > 3){
+					y -= 1;
+					x -= 1;
+				}
+
+				enemyMinimapMarkers.add(new EnemyMinimapMarker(x, y, getEnemyColor(player.getCombatLevel())));
+			}
+		}
+	}
+
+
+
+	private void startMinimapThread(){
+		if (minimapTask != null) {
+			minimapTask.cancel(true);
+		}
+
+		minimapTask = executor.scheduleAtFixedRate(() -> {
+			clientThread.invokeLater(() -> {
+				calculateMinimMapCoords();
+			});
+
+		}, 0, config.minimapRefreshRate(), TimeUnit.MILLISECONDS);
+	}
+
+
+
+
+	private static class EnemyMinimapMarker {
+		int x;
+		int y;
+		Color color;
+
+		EnemyMinimapMarker(int x, int y, Color color) {
+			this.x = x;
+			this.y = y;
+			this.color = color;
+		}
+	}
+
+
 }//end of main class
+
+
+

@@ -1,9 +1,6 @@
 package com.mycombatlevel;
 
-import net.runelite.client.config.Config;
-import net.runelite.client.config.ConfigGroup;
-import net.runelite.client.config.ConfigItem;
-import net.runelite.client.config.ConfigSection;
+import net.runelite.client.config.*;
 
 import java.awt.*;
 
@@ -175,6 +172,15 @@ public interface ExampleConfig extends Config {
 			section 	= heading_minimap
 	)
 	default int dotWidth() {return 8;}
+	@ConfigItem(
+			keyName 	= "minimapRefreshRate",
+			name 		= "Refresh Rate (ms)",
+			description = "How often do we recalculate the enemies location on the minimap?<Br>Allowed value: 30ms - 1000ms",
+			position 	= 30,
+			section 	= heading_minimap
+	)
+	@Range(min = 30, max = 1000)
+	default int minimapRefreshRate() {return 75;}
 
 
 
