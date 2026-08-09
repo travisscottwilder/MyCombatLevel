@@ -61,10 +61,7 @@ public interface ExampleConfig extends Config {
 			position 	= 20,
 			section 	= heading_highlighting
 	)
-	default HighlightMode highlightMode()
-	{
-		return HighlightMode.ENEMIES_ARE_NEAR;
-	}
+	default HighlightMode highlightMode() { return HighlightMode.ENEMIES_ARE_NEAR; }
 
 
 
@@ -188,4 +185,4 @@ public interface ExampleConfig extends Config {
 
 
 
-}
+} //System.out.println("text here");

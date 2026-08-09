@@ -41,6 +41,8 @@ public class ExamplePlugin extends Plugin {
 	private OverlayManager overlayManager;
 	@Inject
 	private ModelOutlineRenderer modelOutlineRenderer;
+	@Inject
+	private ClientThread clientThread;
 
 
 
@@ -60,8 +62,8 @@ public class ExamplePlugin extends Plugin {
 	private Player localPlayer;
 	private List<Player> allEnemies = new ArrayList<>();
 
-	private boolean inSafeZone		= true;
 	private int myCombatLevel;
+	private boolean inSafeZone		= true;
 	private int wildernessLevel 	= 0;
 	private int lastWildernessLevel = 0;
 	private boolean isPvpWorld 		= false;
@@ -70,9 +72,6 @@ public class ExamplePlugin extends Plugin {
 	private final overlay_minimap 	overlay_minimap 	= new overlay_minimap();
 	private final overlay_screen 	overlay_screen 		= new overlay_screen();
 
-
-	@Inject
-	private ClientThread clientThread;
 	private final ScheduledExecutorService executor = Executors.newSingleThreadScheduledExecutor();
 	private ScheduledFuture<?> minimapTask;
 
@@ -82,18 +81,20 @@ public class ExamplePlugin extends Plugin {
 
 	@Override
 	protected void startUp() {
-		overlayManager.add(overlay_minimap);overlayManager.add(overlay_screen);
+		overlayManager.add(overlay_minimap);
+		overlayManager.add(overlay_screen);
+		recalcCachedConfigs();
 
 		calculateLocalAttackRange();
 		allEnemies	= calculateAllEnemies();
 		isPvpWorld 	= WorldType.isPvpWorld(client.getWorldType());
-
 		startMinimapThread();
 	}
 
 	@Override
 	protected void shutDown() {
-		overlayManager.remove(overlay_minimap);overlayManager.remove(overlay_screen);
+		overlayManager.remove(overlay_minimap);
+		overlayManager.remove(overlay_screen);
 
 		if (minimapTask != null) {
 			minimapTask.cancel(true);
@@ -104,9 +105,12 @@ public class ExamplePlugin extends Plugin {
 
 
 
+
 	@Subscribe
 	public void onConfigChanged(ConfigChanged event) {
 		if (!event.getGroup().equals("mycombatlevel")) { return; }
+		recalcCachedConfigs();
+		calculateMinimMapCoords();
 		startMinimapThread();
 	}
 
@@ -123,16 +127,17 @@ public class ExamplePlugin extends Plugin {
 		calculateLocalAttackRange();
 		int playerCombatLevel = player.getCombatLevel();
 		if (playerCombatLevel >= attackMin && playerCombatLevel <= attackMax) { allEnemies.add(player); }
+		calculateMinimMapCoords();
 	}
 
 	@Subscribe
-	private void onPlayerDespawned(PlayerDespawned event) { allEnemies.remove(event.getPlayer());calculateLocalAttackRange(); }
+	private void onPlayerDespawned(PlayerDespawned event) { allEnemies.remove(event.getPlayer());calculateLocalAttackRange();calculateMinimMapCoords(); }
 
 	@Subscribe
 	private void onStatChanged(StatChanged event) { calculateLocalAttackRange();calculateAllEnemies(); }
 
 	@Subscribe
-	public void onWorldChanged(WorldChanged event) {isPvpWorld = WorldType.isPvpWorld(client.getWorldType());calculateAllEnemies(); }
+	public void onWorldChanged(WorldChanged event) { isPvpWorld = WorldType.isPvpWorld(client.getWorldType());calculateAllEnemies(); }
 
 
 
@@ -186,9 +191,16 @@ public class ExamplePlugin extends Plugin {
 
 	@Subscribe
 	private void onGameTick(GameTick event) {
+
+		if (minimapTask == null || minimapTask.isCancelled() || minimapTask.isDone()) {
+			System.out.println("NO THREAD STARTING IT DUDE");
+			calculateAllEnemies();
+			startMinimapThread();
+		}
+
         boolean inWilderness 	= client.getVarbitValue(Varbits.IN_WILDERNESS) == 1;
 		inSafeZone				= !inWilderness; //if we are not in the wilderness then we assume we are safe
-		validationToDraw 		= (inWilderness || config.highlightInaSafeSpot());
+		validationToDraw 		= (inWilderness || cache_highlightInaSafeSpot);
 
 		if (isPvpWorld) {
 			Widget safeZoneWidget	= client.getWidget(InterfaceID.PvpIcons.PVPW_SAFE);
@@ -196,7 +208,6 @@ public class ExamplePlugin extends Plugin {
 			wildernessLevel 		= 15;
 
 			if(!inSafeZone) { validationToDraw = true; }
-
 		}else{ wildernessLevel 		= 1; }
 
 		if(inWilderness) {
@@ -218,7 +229,7 @@ public class ExamplePlugin extends Plugin {
 		}
 
 		//do our safe zone check
-		if(wildernessLevel == 0){if(config.highlightInaSafeSpot()){ wildernessLevel = 1; }}
+		if(wildernessLevel == 0){ if(cache_highlightInaSafeSpot){ wildernessLevel = 1; } }
 
 		//if our wilderness level changes then calc our wilderness specific stuff
 		if(wildernessLevel != lastWildernessLevel) {
@@ -240,24 +251,12 @@ public class ExamplePlugin extends Plugin {
 			if (client.getGameState() != GameState.LOGGED_IN) { return null; }
 
 			if(validationToDraw && !enemyMinimapMarkers.isEmpty()) {
-
 				for (EnemyMinimapMarker marker : enemyMinimapMarkers) {
-
-					graphics.setColor(config.dotBackgroundColor());
-					graphics.fillOval(
-							marker.x - 1,
-							marker.y,
-							config.dotWidth(),
-							config.dotWidth()
-					);
+					graphics.setColor(cache_dotBackgroundColor);
+					graphics.fillOval(marker.x - 1, marker.y, cache_dotWidth, cache_dotWidth);
 
 					graphics.setColor(marker.color);
-					graphics.fillOval(
-							marker.x,
-							marker.y,
-							config.dotWidth() - 2,
-							config.dotWidth() - 2
-					);
+					graphics.fillOval(marker.x, marker.y, cache_dotWidth - 2, cache_dotWidth - 2);
 				}
 
 			}
@@ -278,28 +277,23 @@ public class ExamplePlugin extends Plugin {
 					for (Player player : allEnemies) {
 						int playerCombatLevel = player.getCombatLevel();
 						modelOutlineRenderer.drawOutline(
-							player,
-							config.enemiesGlowWidth(),
-							getEnemyColor(playerCombatLevel),
-							config.enemiesGlowWidth() * 3
-						);
+							player, cache_enemiesGlowWidth,
+							getEnemyColor(playerCombatLevel), cache_enemiesGlowWidth * 3);
 					}
 				}
 			}
 
 
 
-            if(validationToDraw && (config.highlightMode() == ExampleConfig.HighlightMode.ALWAYS || !allEnemies.isEmpty())) {
+            if(validationToDraw && (cache_highlightMode == ExampleConfig.HighlightMode.ALWAYS || !allEnemies.isEmpty())) {
 				if (localPlayer != null) {
 					Color myColor;
-					if (!inSafeZone) {	myColor = config.playerAttackableColor();}
-					else{ 				myColor = config.playerSafeColor(); }
+					if (!inSafeZone) {	myColor = cache_playerAttackableColor;}
+					else{ 				myColor = cache_playerSafeColor; }
 
 					modelOutlineRenderer.drawOutline(
-						localPlayer,
-						config.yourPlayersGlowWidth(),
-						myColor,
-						config.yourPlayersGlowWidth()*3
+						localPlayer, cache_yourPlayersGlowWidth,
+						myColor, cache_yourPlayersGlowWidth*3
 					);
 				}
 			}
@@ -317,17 +311,17 @@ public class ExamplePlugin extends Plugin {
 
 		//if our difference is positive then we are higher combat then them
 		if(difference == 0 || difference == 1 || difference == 2){
-			colorChosen = config.enemyEqual();
+			colorChosen = cache_enemyEqual;
 		}else if(difference >= 3){
-			colorChosen = config.enemyEasyColor();
+			colorChosen = cache_enemyEasyColor;
 		}else{
 			if(difference < -6){
-				colorChosen = config.enemyExtremeColor();
+				colorChosen = cache_enemyExtremeColor;
 			}else if(difference < -3){
-				colorChosen = config.enemyHardColor();
+				colorChosen = cache_enemyHardColor;
 			}
 			else  {
-				colorChosen = config.enemyChallengingColor();
+				colorChosen = cache_enemyChallengingColor;
 			}
 		}
 
@@ -371,33 +365,37 @@ public class ExamplePlugin extends Plugin {
 	private void calculateMinimMapCoords(){
 		enemyMinimapMarkers.clear();
 
-		for (Player player : allEnemies) {
-			LocalPoint localPoint = player.getLocalLocation();
+		try {
+			for (Player player : allEnemies) {
+				LocalPoint localPoint = player.getLocalLocation();
 
-			if (localPoint == null) { continue; }
+				if (localPoint == null) { 	continue; }
+				if(client == null) { 		continue; }
 
-			Point minimapPoint = Perspective.localToMinimap(client, localPoint);
-			if (minimapPoint != null) {
-				int x = minimapPoint.getX();
-				int y = minimapPoint.getY();
+				Point minimapPoint = Perspective.localToMinimap(client, localPoint);
+				if (minimapPoint != null) {
+					int x = minimapPoint.getX();
+					int y = minimapPoint.getY();
 
-				if(config.dotWidth() > 10){
-					x -= 4;
-					y -= 3;
-				}else if(config.dotWidth() > 8){
-					x -= 3;
-					y -= 2;
-				}else if(config.dotWidth() > 6) {
-					x -= 2;
-					y -= 1;
-				}else if(config.dotWidth() > 3){
-					y -= 1;
-					x -= 1;
+					if (cache_dotWidth > 10) {
+						x -= 4;
+						y -= 3;
+					} else if (cache_dotWidth > 8) {
+						x -= 3;
+						y -= 2;
+					} else if (cache_dotWidth > 6) {
+						x -= 2;
+						y -= 1;
+					} else if (cache_dotWidth > 3) {
+						y -= 1;
+						x -= 1;
+					}
+
+					enemyMinimapMarkers.add(new EnemyMinimapMarker(x, y, getEnemyColor(player.getCombatLevel())));
 				}
-
-				enemyMinimapMarkers.add(new EnemyMinimapMarker(x, y, getEnemyColor(player.getCombatLevel())));
 			}
-		}
+
+		}catch (Throwable e) { System.out.println("THREAD ERROR CAUGHT"); }
 	}
 
 
@@ -405,6 +403,7 @@ public class ExamplePlugin extends Plugin {
 	private void startMinimapThread(){
 		if (minimapTask != null) {
 			minimapTask.cancel(true);
+			minimapTask = null;
 		}
 
 		minimapTask = executor.scheduleAtFixedRate(() -> {
@@ -412,7 +411,7 @@ public class ExamplePlugin extends Plugin {
 				calculateMinimMapCoords();
 			});
 
-		}, 0, config.minimapRefreshRate(), TimeUnit.MILLISECONDS);
+		}, 0, cache_minimapRefreshRate, TimeUnit.MILLISECONDS);
 	}
 
 
@@ -424,14 +423,45 @@ public class ExamplePlugin extends Plugin {
 		Color color;
 
 		EnemyMinimapMarker(int x, int y, Color color) {
-			this.x = x;
-			this.y = y;
-			this.color = color;
+			this.x 		= x;
+			this.y 		= y;
+			this.color 	= color;
 		}
 	}
 
 
-}//end of main class
+	private boolean cache_highlightInaSafeSpot;
+	private ExampleConfig.HighlightMode cache_highlightMode;
+	private Color cache_playerSafeColor;
+	private Color cache_playerAttackableColor;
+	private int cache_yourPlayersGlowWidth;
+	private Color cache_enemyEasyColor;
+	private Color cache_enemyEqual;
+	private Color cache_enemyChallengingColor;
+	private Color cache_enemyHardColor;
+	private Color cache_enemyExtremeColor;
+	private int cache_enemiesGlowWidth;
+	private Color cache_dotBackgroundColor;
+	private int cache_dotWidth;
+	private int cache_minimapRefreshRate;
+	private void recalcCachedConfigs(){
+		cache_highlightInaSafeSpot	= config.highlightInaSafeSpot();
+		cache_highlightMode			= config.highlightMode();
+		cache_playerSafeColor		= config.playerSafeColor();
+		cache_playerAttackableColor	= config.playerAttackableColor();
+		cache_yourPlayersGlowWidth	= config.yourPlayersGlowWidth();
+		cache_enemyEasyColor		= config.enemyEasyColor();
+		cache_enemyEqual			= config.enemyEqual();
+		cache_enemyChallengingColor	= config.enemyChallengingColor();
+		cache_enemyHardColor		= config.enemyHardColor();
+		cache_enemyExtremeColor 	= config.enemyExtremeColor();
+		cache_enemiesGlowWidth 		= config.enemiesGlowWidth();
+		cache_dotBackgroundColor 	= config.dotBackgroundColor();
+		cache_dotWidth 				= config.dotWidth();
+		cache_minimapRefreshRate 	= config.minimapRefreshRate();
+	}
+
+}//end of main class ||  System.out.println("text here");
 
 
 
