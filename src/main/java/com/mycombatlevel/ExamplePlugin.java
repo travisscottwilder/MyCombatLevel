@@ -110,7 +110,7 @@ public class ExamplePlugin extends Plugin {
 	public void onConfigChanged(ConfigChanged event) {
 		if (!event.getGroup().equals("mycombatlevel")) { return; }
 		recalcCachedConfigs();
-		calculateMinimMapCoords();
+		calculateAllEnemies();
 		startMinimapThread();
 	}
 
@@ -364,9 +364,11 @@ public class ExamplePlugin extends Plugin {
 
 	private void calculateMinimMapCoords(){
 		enemyMinimapMarkers.clear();
+		Player last_player = null;
 
 		try {
 			for (Player player : allEnemies) {
+				last_player = player;
 				LocalPoint localPoint = player.getLocalLocation();
 
 				if (localPoint == null) { 	continue; }
@@ -395,7 +397,10 @@ public class ExamplePlugin extends Plugin {
 				}
 			}
 
-		}catch (Throwable e) { System.out.println("THREAD ERROR CAUGHT"); }
+		}catch (Throwable e) {
+			System.out.println("THREAD ERROR CAUGHT");
+			if(last_player != null) { allEnemies.remove(last_player); }
+		}
 	}
 
 
@@ -407,10 +412,7 @@ public class ExamplePlugin extends Plugin {
 		}
 
 		minimapTask = executor.scheduleAtFixedRate(() -> {
-			clientThread.invokeLater(() -> {
-				calculateMinimMapCoords();
-			});
-
+			clientThread.invokeLater(this::calculateMinimMapCoords);
 		}, 0, cache_minimapRefreshRate, TimeUnit.MILLISECONDS);
 	}
 

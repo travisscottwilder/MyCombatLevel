@@ -177,7 +177,7 @@ public interface ExampleConfig extends Config {
 			section 	= heading_minimap
 	)
 	@Range(min = 30, max = 1000)
-	default int minimapRefreshRate() {return 75;}
+	default int minimapRefreshRate() {return 69;}
 
 
 
